@@ -9,8 +9,8 @@
 <body>
 <div class="container mt-5">
     <div class="jumbotron text-center">
-        {% if session['profile'] %}
-        <h1 class="display-4">Welcome, {{ session['profile']['name'] }}</h1>
+        {% if session['user_name'] %}
+        <h1 class="display-4">Welcome, {{ session['user_name'] }}</h1>
         <p>Total Points: {{ total_points }}</p>
         <p>Remaining Points: {{ remaining_points }}</p>
         <a href="{{ url_for('player_config') }}" class="btn btn-primary">Player Configuration</a>
@@ -19,7 +19,9 @@
         {% else %}
         <h1 class="display-4">Welcome to {{ group['name'] }}</h1>
         <p class="lead">Explore and join our community.</p>
-        <a href="{{ url_for('login') }}" class="btn btn-primary">Login</a>
+        <div>
+            <script authed="location.reload()" src="https://auth.util.repl.co/script.js"></script>
+        </div>
         {% endif %}
     </div>
 
@@ -49,13 +51,13 @@
         <tbody>
         {% for member in members %}
         <tr>
-            <td>{{ member[1] }}</td> <!-- Username -->
-            <td>{{ member[2] }}</td> <!-- Rank -->
-            <td>{{ member[3] }}</td> <!-- Points -->
+            <td>{{ member['username'] }}</td> <!-- Username -->
+            <td>{{ member['rank'] }}</td> <!-- Rank -->
+            <td>{{ member['points'] }}</td> <!-- Points -->
             <td>
-                {% if session['profile'] and session['admin'] %}
+                {% if session['user_name'] %}
                 <form method="POST" action="{{ url_for('assign_points') }}" style="display:inline;">
-                    <input type="hidden" name="username" value="{{ member[1] }}">
+                    <input type="hidden" name="username" value="{{ member['username'] }}">
                     <input type="number" name="points" class="form-control" placeholder="Points" required>
                     <button type="submit" class="btn btn-sm btn-outline-success">Assign Points</button>
                 </form>

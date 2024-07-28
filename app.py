@@ -1,52 +1,26 @@
-from flask import Flask, render_template, request, redirect, url_for, session
+import os
+from flask import Flask, render_template, request, redirect, session, url_for, jsonify
 from replit import web
 import sqlite3
-import random
-import os
+import uuid
 import requests
 
 app = Flask(__name__)
-app.secret_key = os.getenv('FLASK_SECRET_KEY')
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'your_secret_key')  # Set this in your Replit secrets
 
-# Database configuration
 DATABASE = 'wise_old_man.db'
 
 def get_db():
     conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
     return conn
 
-# Create tables if they don't exist
-def init_db():
-    with get_db() as conn:
-        conn.execute('''CREATE TABLE IF NOT EXISTS members (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        username TEXT UNIQUE,
-                        rank TEXT,
-                        points INTEGER DEFAULT 0,
-                        given_points INTEGER DEFAULT 0)''')
-        conn.execute('''CREATE TABLE IF NOT EXISTS users (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        username TEXT UNIQUE,
-                        verified BOOLEAN DEFAULT FALSE,
-                        token TEXT)''')
-        conn.execute('''CREATE TABLE IF NOT EXISTS config (
-                        rank TEXT UNIQUE,
-                        total_points INTEGER)''')
-
-# Initialize database
-init_db()
-
-def generate_token():
-    """Generates a unique token in the format ###-###-###"""
-    return f"{random.randint(100, 999)}-{random.randint(100, 999)}-{random.randint(100, 999)}"
-
+# Fetch group data from Wise Old Man API
 def get_group_data(group_id):
     response = requests.get(f"https://api.wiseoldman.net/v2/groups/{group_id}")
     if response.status_code == 200:
         return response.json()
-    else:
-        print(f"Error fetching group data: {response.status_code}")
-        return None
+    return None
 
 @app.route('/')
 def index():
@@ -58,17 +32,16 @@ def index():
     group_data = get_group_data(group_id)
     if group_data:
         memberships = group_data.get('memberships', [])
-        members = [(member['player']['id'],    # Unique ID
-                    member['player']['username'],  # Username
-                    member['role'],  # Role as rank
-                    0)  # Placeholder for points
-                   for member in memberships]
+        members = [{'username': member['player']['username'],
+                    'rank': member['role'],
+                    'points': 0,
+                    'given_points': 0} for member in memberships]
 
         # Store members in the database
         with get_db() as conn:
             for member in members:
                 conn.execute('REPLACE INTO members (username, rank, points, given_points) VALUES (?, ?, ?, ?)',
-                             (member[1], member[2], member[3], member[3]))
+                             (member['username'], member['rank'], member['points'], member['given_points']))
 
         # Fetch members from the database with optional filtering and sorting
         query = 'SELECT * FROM members WHERE 1=1'
@@ -80,15 +53,12 @@ def index():
         with get_db() as conn:
             members = conn.execute(query).fetchall()
 
-        # Extract unique ranks from the members data
-        unique_ranks = sorted(set(member[2] for member in members), key=lambda x: x.lower())
-
         # Calculate total and remaining points for the user if logged in
         user_total_points = 0
         user_remaining_points = 0
-        if 'profile' in session:
+        if 'user_name' in session:
             with get_db() as conn:
-                user_info = conn.execute('SELECT rank, given_points FROM members WHERE username = ?', (session['profile']['username'],)).fetchone()
+                user_info = conn.execute('SELECT rank, given_points FROM members WHERE username = ?', (session['user_name'],)).fetchone()
                 if user_info:
                     rank, given_points = user_info
                     total_points_info = conn.execute('SELECT total_points FROM config WHERE rank = ?', (rank,)).fetchone()
@@ -96,85 +66,59 @@ def index():
                         user_total_points = total_points_info[0]
                         user_remaining_points = user_total_points - given_points
 
-        return render_template('index.html', group=group_data, members=members, search=search_query, sort=sort_by, filter_rank=filter_rank, ranks=unique_ranks, total_points=user_total_points, remaining_points=user_remaining_points)
+        return render_template('index.html', group=group_data, members=members, search=search_query, sort=sort_by, rank=filter_rank, total_points=user_total_points, remaining_points=user_remaining_points)
     else:
         return render_template('error.html', message="Group not found"), 404
 
 @app.route('/login')
 def login():
-    return web.auth.login()
-
-@app.route('/callback')
-def callback():
-    web.auth.authenticate()
-    user_info = web.auth.get_user_info()
-    session['profile'] = user_info
-    session['admin'] = False  # You may want to adjust this based on your needs
-    return redirect(url_for('index'))
+    web.auth.login()
 
 @app.route('/logout')
 def logout():
     web.auth.deauthenticate()
-    session.clear()
     return redirect(url_for('index'))
+
+@app.route('/callback')
+def callback():
+    return redirect(url_for('index'))
+
+@app.route('/config', methods=['GET', 'POST'])
+def config():
+    if request.method == 'POST' and 'user_name' in session:
+        rank = request.form['rank']
+        total_points = int(request.form['total_points'])
+        with get_db() as conn:
+            conn.execute('REPLACE INTO config (rank, total_points) VALUES (?, ?)', (rank, total_points))
+    return render_template('config.html')
+
+@app.route('/player_config', methods=['GET', 'POST'])
+def player_config():
+    if 'user_name' in session:
+        if request.method == 'POST':
+            username = session['user_name']
+            token = request.form['token']
+            with get_db() as conn:
+                conn.execute('REPLACE INTO members (username, token) VALUES (?, ?)', (username, token))
+        return render_template('player_config.html')
+    else:
+        return redirect(url_for('login'))
 
 @app.route('/assign_points', methods=['POST'])
 def assign_points():
-    if 'profile' in session and session.get('admin'):
+    if 'user_name' in session:
         username = request.form['username']
         points = int(request.form['points'])
         with get_db() as conn:
             conn.execute('UPDATE members SET points = points + ? WHERE username = ?', (points, username))
-            conn.execute('UPDATE members SET given_points = given_points + ? WHERE username = ?', (points, session['profile']['username']))
+            if 'user_name' in session:
+                conn.execute('UPDATE members SET given_points = given_points + ? WHERE username = ?', (points, session['user_name']))
         return redirect(url_for('index'))
-    else:
-        return redirect(url_for('index'))
-
-@app.route('/config', methods=['GET', 'POST'])
-def config():
-    if 'profile' in session and session.get('admin'):
-        if request.method == 'POST':
-            # Update the config with the provided points for each rank
-            ranks = request.form.getlist('rank')
-            points = request.form.getlist('points')
-            with get_db() as conn:
-                for rank, total_points in zip(ranks, points):
-                    conn.execute('REPLACE INTO config (rank, total_points) VALUES (?, ?)', (rank, total_points))
-
-        # Fetch the current configuration
-        with get_db() as conn:
-            configs = conn.execute('SELECT * FROM config').fetchall()
-
-        return render_template('config.html', configs=configs)
     else:
         return redirect(url_for('login'))
 
-@app.route('/player_config', methods=['GET', 'POST'])
-def player_config():
-    if 'profile' in session:
-        if request.method == 'POST':
-            character_name = request.form['character_name']
-            token = generate_token()
-            with get_db() as conn:
-                conn.execute('REPLACE INTO members (username, token) VALUES (?, ?)', (character_name, token))
-                conn.execute('UPDATE users SET verified = 0 WHERE username = ?', (session['profile']['username'],))
-            return render_template('player_config.html', message="Character added. Please verify in RuneLite using the token provided.", token=token)
-
-        # Fetch the current characters
-        with get_db() as conn:
-            characters = conn.execute('SELECT * FROM members WHERE username = ?', (session['profile']['username'],)).fetchall()
-
-        return render_template('player_config.html', characters=characters)
-    else:
-        return redirect(url_for('login'))
-
-def verify_token(username, token):
-    with get_db() as conn:
-        db_token = conn.execute('SELECT token FROM members WHERE username = ?', (username,)).fetchone()
-        if db_token and db_token[0] == token:
-            conn.execute('UPDATE users SET verified = 1 WHERE username = ?', (username,))
-            return True
-    return False
+def generate_token():
+    return str(uuid.uuid4()).replace('-', '')
 
 if __name__ == '__main__':
-    app.run(debug=True, port=3000)
+    app.run(host='0.0.0.0', port=8080)
