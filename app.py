@@ -1,36 +1,11 @@
 from flask import Flask, render_template, request, redirect, url_for, session
+from replit import web
 import sqlite3
 import random
-import requests
-from authlib.integrations.flask_client import OAuth
 import os
-from dotenv import load_dotenv
-
-# Load environment variables from .env file
-load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY')
-
-# Auth0 Configuration
-AUTH0_CLIENT_ID = os.getenv('AUTH0_CLIENT_ID')
-AUTH0_CLIENT_SECRET = os.getenv('AUTH0_CLIENT_SECRET')
-AUTH0_DOMAIN = os.getenv('AUTH0_DOMAIN')
-AUTH0_CALLBACK_URL = 'http://localhost:5000/callback'
-
-# Initialize OAuth
-oauth = OAuth(app)
-auth0 = oauth.register(
-    'auth0',
-    client_id=AUTH0_CLIENT_ID,
-    client_secret=AUTH0_CLIENT_SECRET,
-    api_base_url=f'https://{AUTH0_DOMAIN}',
-    access_token_url=f'https://{AUTH0_DOMAIN}/oauth/token',
-    authorize_url=f'https://{AUTH0_DOMAIN}/authorize',
-    client_kwargs={
-        'scope': 'openid profile email',
-    },
-)
 
 # Database configuration
 DATABASE = 'wise_old_man.db'
@@ -50,9 +25,7 @@ def init_db():
                         given_points INTEGER DEFAULT 0)''')
         conn.execute('''CREATE TABLE IF NOT EXISTS users (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        auth0_id TEXT UNIQUE,
-                        email TEXT UNIQUE,
-                        name TEXT,
+                        username TEXT UNIQUE,
                         verified BOOLEAN DEFAULT FALSE,
                         token TEXT)''')
         conn.execute('''CREATE TABLE IF NOT EXISTS config (
@@ -94,7 +67,7 @@ def index():
         with get_db() as conn:
             for member in members:
                 conn.execute('REPLACE INTO members (username, rank, points, given_points) VALUES (?, ?, ?, ?)',
-                             (member[1], member[2], member[3], member[3]))  # Storing username, rank, points, given_points
+                             (member[1], member[2], member[3], member[3]))
 
         # Fetch members from the database with optional filtering and sorting
         query = 'SELECT * FROM members WHERE 1=1'
@@ -114,7 +87,7 @@ def index():
         user_remaining_points = 0
         if 'profile' in session:
             with get_db() as conn:
-                user_info = conn.execute('SELECT rank, given_points FROM members WHERE username = ?', (session['username'],)).fetchone()
+                user_info = conn.execute('SELECT rank, given_points FROM members WHERE username = ?', (session['profile']['username'],)).fetchone()
                 if user_info:
                     rank, given_points = user_info
                     total_points_info = conn.execute('SELECT total_points FROM config WHERE rank = ?', (rank,)).fetchone()
@@ -126,30 +99,23 @@ def index():
     else:
         return render_template('error.html', message="Group not found"), 404
 
-
 @app.route('/login')
 def login():
-    return auth0.authorize_redirect(redirect_uri=AUTH0_CALLBACK_URL)
+    return web.auth.login()
 
 @app.route('/callback')
 def callback():
-    auth0.authorize_access_token()
-    userinfo = auth0.get('userinfo').json()
-    session['jwt_payload'] = userinfo
-    session['profile'] = {
-        'user_id': userinfo['sub'],
-        'name': userinfo['name'],
-        'picture': userinfo['picture'],
-        'email': userinfo['email']
-    }
+    web.auth.authenticate()
+    user_info = web.auth.get_user_info()
+    session['profile'] = user_info
+    session['admin'] = False  # You may want to adjust this based on your needs
     return redirect(url_for('index'))
 
 @app.route('/logout')
 def logout():
+    web.auth.deauthenticate()
     session.clear()
-    return redirect(
-        f'https://{AUTH0_DOMAIN}/v2/logout?client_id={AUTH0_CLIENT_ID}&returnTo={url_for("index", _external=True)}'
-    )
+    return redirect(url_for('index'))
 
 @app.route('/assign_points', methods=['POST'])
 def assign_points():
@@ -158,7 +124,7 @@ def assign_points():
         points = int(request.form['points'])
         with get_db() as conn:
             conn.execute('UPDATE members SET points = points + ? WHERE username = ?', (points, username))
-            conn.execute('UPDATE members SET given_points = given_points + ? WHERE username = ?', (points, session['profile']['name']))
+            conn.execute('UPDATE members SET given_points = given_points + ? WHERE username = ?', (points, session['profile']['username']))
         return redirect(url_for('index'))
     else:
         return redirect(url_for('index'))
@@ -190,12 +156,12 @@ def player_config():
             token = generate_token()
             with get_db() as conn:
                 conn.execute('REPLACE INTO members (username, token) VALUES (?, ?)', (character_name, token))
-                conn.execute('UPDATE users SET verified = 0 WHERE auth0_id = ?', (session['profile']['user_id'],))
+                conn.execute('UPDATE users SET verified = 0 WHERE username = ?', (session['profile']['username'],))
             return render_template('player_config.html', message="Character added. Please verify in RuneLite using the token provided.", token=token)
 
         # Fetch the current characters
         with get_db() as conn:
-            characters = conn.execute('SELECT * FROM members WHERE username = ?', (session['profile']['name'],)).fetchall()
+            characters = conn.execute('SELECT * FROM members WHERE username = ?', (session['profile']['username'],)).fetchall()
 
         return render_template('player_config.html', characters=characters)
     else:
@@ -205,9 +171,9 @@ def verify_token(username, token):
     with get_db() as conn:
         db_token = conn.execute('SELECT token FROM members WHERE username = ?', (username,)).fetchone()
         if db_token and db_token[0] == token:
-            conn.execute('UPDATE users SET verified = 1 WHERE auth0_id = (SELECT auth0_id FROM users WHERE name = ?)', (username,))
+            conn.execute('UPDATE users SET verified = 1 WHERE username = ?', (username,))
             return True
     return False
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, port=3000)
