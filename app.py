@@ -24,6 +24,8 @@ def get_group_data(group_id):
 
 @app.route('/')
 def index():
+    if 'user_name' not in session:
+        return redirect(url_for('login'))
     group_id = 6117
     search_query = request.args.get('search', '')
     sort_by = request.args.get('sort', 'username')
@@ -77,15 +79,19 @@ def login():
 @app.route('/logout')
 def logout():
     web.auth.deauthenticate()
+    session.clear()  # Clear the session
     return redirect(url_for('index'))
 
 @app.route('/callback')
 def callback():
+    # Replit authentication should manage the session
     return redirect(url_for('index'))
 
 @app.route('/config', methods=['GET', 'POST'])
 def config():
-    if request.method == 'POST' and 'user_name' in session:
+    if 'user_name' not in session:
+        return redirect(url_for('login'))
+    if request.method == 'POST':
         rank = request.form['rank']
         total_points = int(request.form['total_points'])
         with get_db() as conn:
@@ -94,31 +100,29 @@ def config():
 
 @app.route('/player_config', methods=['GET', 'POST'])
 def player_config():
-    if 'user_name' in session:
-        if request.method == 'POST':
-            username = session['user_name']
-            token = request.form['token']
-            with get_db() as conn:
-                conn.execute('REPLACE INTO members (username, token) VALUES (?, ?)', (username, token))
-        return render_template('player_config.html')
-    else:
+    if 'user_name' not in session:
         return redirect(url_for('login'))
+    if request.method == 'POST':
+        username = session['user_name']
+        token = request.form['token']
+        with get_db() as conn:
+            conn.execute('REPLACE INTO members (username, token) VALUES (?, ?)', (username, token))
+    return render_template('player_config.html')
 
 @app.route('/assign_points', methods=['POST'])
 def assign_points():
-    if 'user_name' in session:
-        username = request.form['username']
-        points = int(request.form['points'])
-        with get_db() as conn:
-            conn.execute('UPDATE members SET points = points + ? WHERE username = ?', (points, username))
-            if 'user_name' in session:
-                conn.execute('UPDATE members SET given_points = given_points + ? WHERE username = ?', (points, session['user_name']))
-        return redirect(url_for('index'))
-    else:
+    if 'user_name' not in session:
         return redirect(url_for('login'))
+    username = request.form['username']
+    points = int(request.form['points'])
+    with get_db() as conn:
+        conn.execute('UPDATE members SET points = points + ? WHERE username = ?', (points, username))
+        if 'user_name' in session:
+            conn.execute('UPDATE members SET given_points = given_points + ? WHERE username = ?', (points, session['user_name']))
+    return redirect(url_for('index'))
 
 def generate_token():
     return str(uuid.uuid4()).replace('-', '')
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+    app.run(host='0.0.0.0', port=3000, debug=True)
