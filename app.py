@@ -3,6 +3,7 @@ from replit import web
 import sqlite3
 import random
 import os
+import requests
 
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY')
