@@ -103,6 +103,7 @@ def index():
             if conn:
                 cursor = conn.cursor()
                 for member in members:
+                    print(f"Inserting/updating member: {member['username']}")
                     cursor.execute('INSERT INTO members (username, rank, points, given_points) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE rank=%s, points=%s, given_points=%s',
                                    (member['username'], member['rank'], member['points'], member['given_points'], member['rank'], member['points'], member['given_points']))
                 conn.commit()
@@ -123,16 +124,19 @@ def index():
             conn = get_db()
             if conn:
                 cursor = conn.cursor(dictionary=True)
+                print(f"Executing query: {query}")
                 cursor.execute(query)
                 members = cursor.fetchall()
                 cursor.close()
                 conn.close()
+                print(f"Fetched members: {members}")
         except mysql.connector.Error as e:
             print(f"Database Error: {e}")
 
         return render_template('index.html', group=group_data, members=members, search=search_query, sort=sort_by, rank=filter_rank, replit_user_name=replit_user_name)
     else:
         return render_template('error.html', message="Group not found"), 404
+
 
 @app.route('/config', methods=['GET', 'POST'])
 def config():
