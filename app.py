@@ -4,6 +4,8 @@ import requests
 import random
 import string
 import os
+import threading
+import time
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -80,6 +82,47 @@ def generate_verification_key(length=6):
     characters = string.ascii_uppercase + string.digits
     return ''.join(random.choice(characters) for i in range(length))
 
+def update_player_data():
+    while True:
+        try:
+            group_id = 6117
+            group_data = get_group_data(group_id)
+            if group_data:
+                memberships = group_data.get('memberships', [])
+                members = [{'username': member['player']['username'],
+                            'rank': member['role'],
+                            'points': 0,
+                            'given_points': 0} for member in memberships]
+                conn = get_db()
+                if conn:
+                    cursor = conn.cursor()
+                    for member in members:
+                        print(f"Inserting/updating member: {member['username']}")
+                        cursor.execute('INSERT INTO members (username, rank, points, given_points) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE rank=%s, points=%s, given_points=%s',
+                                       (member['username'], member['rank'], member['points'], member['given_points'], member['rank'], member['points'], member['given_points']))
+                    conn.commit()
+                    cursor.close()
+                    conn.close()
+            time.sleep(600)  # Sleep for 10 minutes
+        except mysql.connector.Error as e:
+            print(f"Database Error (UPDATE): {e}")
+            time.sleep(600)  # Sleep for 10 minutes even if there's an error
+
+def reset_points_weekly():
+    while True:
+        try:
+            conn = get_db()
+            if conn:
+                cursor = conn.cursor()
+                cursor.execute('UPDATE members SET points = 0, given_points = 0')
+                conn.commit()
+                cursor.close()
+                conn.close()
+            time.sleep(604800)  # Sleep for 1 week
+        except mysql.connector.Error as e:
+            print(f"Database Error (RESET): {e}")
+            time.sleep(604800)  # Sleep for 1 week even if there's an error
+
 @app.route('/')
 def index():
     replit_user_id = request.headers.get('X-Replit-User-Id')
@@ -94,68 +137,42 @@ def index():
     members = []
     ranks = []
 
-    group_data = get_group_data(group_id)
-    if group_data:
-        memberships = group_data.get('memberships', [])
-        members = [{'username': member['player']['username'],
-                    'rank': member['role'],
-                    'points': 0,
-                    'given_points': 0} for member in memberships]
+    query = 'SELECT DISTINCT rank FROM members ORDER BY rank'
+    try:
+        conn = get_db()
+        if conn:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute(query)
+            ranks = cursor.fetchall()
+            cursor.close()
+            conn.close()
+            print(f"Fetched ranks: {ranks}")
+    except mysql.connector.Error as e:
+        print(f"Database Error (SELECT RANKS): {e}")
+        error_message = "Error fetching ranks from the database."
 
-        try:
-            conn = get_db()
-            if conn:
-                cursor = conn.cursor()
-                for member in members:
-                    print(f"Inserting/updating member: {member['username']}")
-                    cursor.execute('INSERT INTO members (username, rank, points, given_points) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE rank=%s, points=%s, given_points=%s',
-                                   (member['username'], member['rank'], member['points'], member['given_points'], member['rank'], member['points'], member['given_points']))
-                conn.commit()
-                cursor.close()
-                conn.close()
-        except mysql.connector.Error as e:
-            print(f"Database Error (INSERT/UPDATE): {e}")
-            error_message = "Error updating members in the database."
+    query = 'SELECT * FROM members WHERE 1=1'
+    if search_query:
+        query += f" AND username LIKE '%{search_query}%'"
+    if filter_rank:
+        query += f" AND rank = '{filter_rank}'"
+    query += f" ORDER BY {sort_by}"
 
-        query = 'SELECT DISTINCT rank FROM members ORDER BY rank'
-        try:
-            conn = get_db()
-            if conn:
-                cursor = conn.cursor(dictionary=True)
-                cursor.execute(query)
-                ranks = cursor.fetchall()
-                cursor.close()
-                conn.close()
-                print(f"Fetched ranks: {ranks}")
-        except mysql.connector.Error as e:
-            print(f"Database Error (SELECT RANKS): {e}")
-            error_message = "Error fetching ranks from the database."
+    try:
+        conn = get_db()
+        if conn:
+            cursor = conn.cursor(dictionary=True)
+            print(f"Executing query: {query}")
+            cursor.execute(query)
+            members = cursor.fetchall()
+            cursor.close()
+            conn.close()
+            print(f"Fetched members: {members}")
+    except mysql.connector.Error as e:
+        print(f"Database Error (SELECT MEMBERS): {e}")
+        error_message = "Error fetching members from the database."
 
-        query = 'SELECT * FROM members WHERE 1=1'
-        if search_query:
-            query += f" AND username LIKE '%{search_query}%'"
-        if filter_rank:
-            query += f" AND rank = '{filter_rank}'"
-        query += f" ORDER BY {sort_by}"
-
-        try:
-            conn = get_db()
-            if conn:
-                cursor = conn.cursor(dictionary=True)
-                print(f"Executing query: {query}")
-                cursor.execute(query)
-                members = cursor.fetchall()
-                cursor.close()
-                conn.close()
-                print(f"Fetched members: {members}")
-        except mysql.connector.Error as e:
-            print(f"Database Error (SELECT MEMBERS): {e}")
-            error_message = "Error fetching members from the database."
-
-        return render_template('index.html', group=group_data, members=members, search=search_query, sort=sort_by, rank=filter_rank, ranks=ranks, replit_user_name=replit_user_name, error_message=error_message)
-    else:
-        return render_template('error.html', message="Group not found"), 404
-
+    return render_template('index.html', members=members, search=search_query, sort=sort_by, rank=filter_rank, ranks=ranks, replit_user_name=replit_user_name, error_message=error_message)
 
 @app.route('/config', methods=['GET', 'POST'])
 def config():
@@ -163,20 +180,26 @@ def config():
     if not replit_user_name:
         return redirect(url_for('index'))
 
-    if request.method == 'POST':
-        rank = request.form['rank']
-        total_points = int(request.form['total_points'])
-        try:
-            conn = get_db()
-            if conn:
-                cursor = conn.cursor()
+    conn = get_db()
+    if conn:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute('SELECT rank FROM characters WHERE replit_user_name = %s AND verified = True', (replit_user_name,))
+        user_rank = cursor.fetchone()
+        if user_rank is None or user_rank['rank'] not in ['owner', 'deputy_owner']:
+            return redirect(url_for('index'))
+        cursor.execute('SELECT rank, total_points FROM config')
+        configs = cursor.fetchall()
+
+        if request.method == 'POST':
+            for config in configs:
+                rank = request.form[f'rank_{config["rank"]}']
+                total_points = int(request.form[f'total_points_{config["rank"]}'])
                 cursor.execute('INSERT INTO config (rank, total_points) VALUES (%s, %s) ON DUPLICATE KEY UPDATE total_points=%s', (rank, total_points, total_points))
-                conn.commit()
-                cursor.close()
-                conn.close()
-        except mysql.connector.Error as e:
-            print(f"Database Error: {e}")
-    return render_template('config.html', replit_user_name=replit_user_name)
+            conn.commit()
+        cursor.close()
+        conn.close()
+
+    return render_template('config.html', replit_user_name=replit_user_name, configs=configs)
 
 @app.route('/player_config', methods=['GET', 'POST'])
 def player_config():
@@ -285,4 +308,6 @@ def verify_character():
 
 if __name__ == '__main__':
     init_db()  # Initialize the database when the app starts
+    threading.Thread(target=update_player_data, daemon=True).start()
+    threading.Thread(target=reset_points_weekly, daemon=True).start()
     app.run(host='0.0.0.0', port=3000, debug=True)
