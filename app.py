@@ -195,13 +195,23 @@ def player_config():
         try:
             conn = get_db()
             if conn:
-                cursor = conn.cursor()
+                cursor = conn.cursor(dictionary=True)
                 cursor.execute('SELECT * FROM characters WHERE character_name = %s', (character_name,))
                 existing_character = cursor.fetchone()
                 if existing_character:
-                    if existing_character['replit_user_id'] == replit_user_id:
+                    # Check the type of existing_character
+                    if isinstance(existing_character, tuple):
+                        print("existing_character is a tuple:", existing_character)
+                        # Convert the tuple to a dictionary
+                        existing_character = dict(existing_character)
+                    elif isinstance(existing_character, dict):
+                        print("existing_character is a dictionary:", existing_character)
+                    else:
+                        print("existing_character is of unexpected type:", type(existing_character))
+
+                    if existing_character.get('replit_user_id') == replit_user_id:
                         message = "Character already exists and belongs to you."
-                        token = existing_character['verification_key']
+                        token = existing_character.get('verification_key')
                     else:
                         message = "Character already claimed by another user."
                 else:
