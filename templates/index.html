@@ -26,13 +26,21 @@
     </div>
 
     <h2>Members</h2>
+
+    <!-- Error Message -->
+    {% if error_message %}
+    <div class="alert alert-danger" role="alert">
+        {{ error_message }}
+    </div>
+    {% endif %}
+
     <form method="GET" action="{{ url_for('index') }}" class="mb-4">
         <div class="input-group">
             <input type="text" name="search" class="form-control" placeholder="Search by name" value="{{ search }}">
             <select name="rank" class="form-select">
                 <option value="">All Ranks</option>
                 {% for unique_rank in ranks %}
-                <option value="{{ unique_rank }}" {% if filter_rank == unique_rank %}selected{% endif %}>{{ unique_rank }}</option>
+                <option value="{{ unique_rank['rank'] }}" {% if filter_rank == unique_rank['rank'] %}selected{% endif %}>{{ unique_rank['rank'] }}</option>
                 {% endfor %}
             </select>
             <button type="submit" class="btn btn-outline-primary">Apply</button>

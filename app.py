@@ -90,6 +90,10 @@ def index():
     sort_by = request.args.get('sort', 'username')
     filter_rank = request.args.get('rank', '')
 
+    error_message = None
+    members = []
+    ranks = []
+
     group_data = get_group_data(group_id)
     if group_data:
         memberships = group_data.get('memberships', [])
@@ -110,7 +114,22 @@ def index():
                 cursor.close()
                 conn.close()
         except mysql.connector.Error as e:
-            print(f"Database Error: {e}")
+            print(f"Database Error (INSERT/UPDATE): {e}")
+            error_message = "Error updating members in the database."
+
+        query = 'SELECT DISTINCT rank FROM members ORDER BY rank'
+        try:
+            conn = get_db()
+            if conn:
+                cursor = conn.cursor(dictionary=True)
+                cursor.execute(query)
+                ranks = cursor.fetchall()
+                cursor.close()
+                conn.close()
+                print(f"Fetched ranks: {ranks}")
+        except mysql.connector.Error as e:
+            print(f"Database Error (SELECT RANKS): {e}")
+            error_message = "Error fetching ranks from the database."
 
         query = 'SELECT * FROM members WHERE 1=1'
         if search_query:
@@ -119,7 +138,6 @@ def index():
             query += f" AND rank = '{filter_rank}'"
         query += f" ORDER BY {sort_by}"
 
-        members = []
         try:
             conn = get_db()
             if conn:
@@ -131,9 +149,10 @@ def index():
                 conn.close()
                 print(f"Fetched members: {members}")
         except mysql.connector.Error as e:
-            print(f"Database Error: {e}")
+            print(f"Database Error (SELECT MEMBERS): {e}")
+            error_message = "Error fetching members from the database."
 
-        return render_template('index.html', group=group_data, members=members, search=search_query, sort=sort_by, rank=filter_rank, replit_user_name=replit_user_name)
+        return render_template('index.html', group=group_data, members=members, search=search_query, sort=sort_by, rank=filter_rank, ranks=ranks, replit_user_name=replit_user_name, error_message=error_message)
     else:
         return render_template('error.html', message="Group not found"), 404
 
