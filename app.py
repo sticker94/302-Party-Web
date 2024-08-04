@@ -1,11 +1,12 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify
-import pymysql
+import mysql.connector
 import requests
 import random
 import string
 import os
 from dotenv import load_dotenv
 
+# Load environment variables from .env file
 load_dotenv()
 
 app = Flask(__name__)
@@ -20,16 +21,15 @@ DATABASE = {
 
 def get_db():
     try:
-        conn = pymysql.connect(
+        conn = mysql.connector.connect(
             host=DATABASE['host'],
-            port=3306,  # Ensure you specify the MySQL port
+            port=3306,
             user=DATABASE['user'],
             password=DATABASE['password'],
-            database=DATABASE['database'],
-            cursorclass=pymysql.cursors.DictCursor
+            database=DATABASE['database']
         )
         return conn
-    except pymysql.MySQLError as e:
+    except mysql.connector.Error as e:
         print(f"Error: {e}")
     return None
 
@@ -117,7 +117,7 @@ def index():
 
         conn = get_db()
         if conn:
-            cursor = conn.cursor()
+            cursor = conn.cursor(dictionary=True)
             cursor.execute(query)
             members = cursor.fetchall()
             cursor.close()
@@ -175,7 +175,7 @@ def player_config():
 
     conn = get_db()
     if conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor(dictionary=True)
         cursor.execute('SELECT * FROM characters WHERE replit_user_id = %s', (replit_user_id,))
         characters = cursor.fetchall()
         cursor.close()
@@ -211,7 +211,7 @@ def verify_character():
 
     conn = get_db()
     if conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor(dictionary=True)
         cursor.execute('SELECT * FROM characters WHERE character_name = %s AND verification_key = %s',
                        (character_name, verification_key))
         character = cursor.fetchone()
