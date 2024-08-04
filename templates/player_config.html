@@ -32,7 +32,7 @@
         <tbody>
         {% for character in characters %}
         <tr>
-            <td>{{ character['username'] }}</td>
+            <td>{{ character['character_name'] }}</td>
             <td>{{ 'Verified' if character['verified'] else 'Not Verified' }}</td>
         </tr>
         {% endfor %}
