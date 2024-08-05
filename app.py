@@ -21,6 +21,8 @@ DATABASE = {
     'database': os.getenv('RM_DB_NAME')
 }
 
+DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1269867901897281708/JuRqO4XNXuAElFVY-S5C-nLQcduS5EGlECT_4_GkiA-gTGjgolswtOZCCyCCJKINLkLC'
+
 def get_db():
     try:
         conn = mysql.connector.connect(
@@ -109,6 +111,12 @@ def map_wom_ranks(wom_ranks):
 
 wom_ranks = fetch_wom_ranks()
 rank_mapping = map_wom_ranks(wom_ranks)
+
+def send_discord_webhook(message):
+    data = {"content": message}
+    response = requests.post(DISCORD_WEBHOOK_URL, json=data)
+    if response.status_code != 204:
+        print(f"Failed to send webhook: {response.status_code} - {response.text}")
 
 def update_player_data():
     while True:
@@ -319,10 +327,11 @@ def assign_points():
 
     username = request.form['username']
     points = int(request.form['points'])
+
     try:
         conn = get_db()
         if conn:
-            cursor = conn.cursor()
+            cursor = conn.cursor(dictionary=True)
             cursor.execute('UPDATE members SET points = points + %s WHERE username = %s', (points, username))
             cursor.execute('''
                 UPDATE members m
@@ -330,9 +339,28 @@ def assign_points():
                 SET m.given_points = m.given_points + %s
                 WHERE ch.replit_user_id = %s
             ''', (points, replit_user_id))
+
+            # Get the highest verified character name for the user
+            cursor.execute('''
+                SELECT ch.character_name
+                FROM characters ch
+                JOIN members m ON ch.character_name = m.username
+                JOIN config c ON m.rank = c.rank
+                WHERE ch.replit_user_id = %s AND ch.verified = 1
+                ORDER BY c.rank_order ASC
+                LIMIT 1
+            ''', (replit_user_id,))
+            character_result = cursor.fetchone()
+            character_name = character_result['character_name'] if character_result else replit_user_name
+
             conn.commit()
             cursor.close()
             conn.close()
+
+            # Send Discord webhook notification
+            message = f"{character_name} assigned {points} points to {username}."
+            send_discord_webhook(message)
+
     except mysql.connector.Error as e:
         print(f"Database Error: {e}")
     return redirect(url_for('index'))
