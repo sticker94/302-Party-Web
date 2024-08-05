@@ -21,8 +21,6 @@ DATABASE = {
     'database': os.getenv('RM_DB_NAME')
 }
 
-WOM_RANKS_URL = 'https://api.wiseoldman.net/v2/groups/type-definitions'
-
 def get_db():
     try:
         conn = mysql.connector.connect(
@@ -36,21 +34,6 @@ def get_db():
     except mysql.connector.Error as e:
         print(f"Error: {e}")
     return None
-
-def fetch_wom_ranks():
-    response = requests.get(WOM_RANKS_URL)
-    if response.status_code == 200:
-        return response.json().get('roleDefinitions', [])
-    return []
-
-def map_wom_ranks(wom_ranks):
-    rank_mapping = {}
-    for rank in wom_ranks:
-        rank_mapping[rank['index']] = rank['name']
-    return rank_mapping
-
-wom_ranks = fetch_wom_ranks()
-rank_mapping = map_wom_ranks(wom_ranks)
 
 def init_db():
     conn = get_db()
@@ -88,17 +71,15 @@ def init_db():
         conn.commit()
         cursor.close()
         conn.close()
-
-        # Insert ranks into config table
         update_config_with_ranks()
 
 def update_config_with_ranks():
     conn = get_db()
     if conn:
         cursor = conn.cursor()
-        for rank_index, rank_name in rank_mapping.items():
+        for rank in rank_mapping.values():
             cursor.execute('INSERT INTO config (rank, total_points) VALUES (%s, %s) ON DUPLICATE KEY UPDATE rank=%s',
-                           (rank_name, 0, rank_name))
+                           (rank, 0, rank))
         conn.commit()
         cursor.close()
         conn.close()
@@ -113,6 +94,21 @@ def generate_verification_key(length=6):
     characters = string.ascii_uppercase + string.digits
     return ''.join(random.choice(characters) for i in range(length))
 
+def fetch_wom_ranks():
+    response = requests.get('https://api.wiseoldman.net/v2/groups/type-definitions')
+    if response.status_code == 200:
+        return response.json().get('roleDefinitions', [])
+    return []
+
+def map_wom_ranks(wom_ranks):
+    rank_mapping = {}
+    for rank in wom_ranks:
+        rank_mapping[rank['id']] = rank['name']
+    return rank_mapping
+
+wom_ranks = fetch_wom_ranks()
+rank_mapping = map_wom_ranks(wom_ranks)
+
 def update_player_data():
     while True:
         try:
@@ -121,7 +117,7 @@ def update_player_data():
             if group_data:
                 memberships = group_data.get('memberships', [])
                 members = [{'username': member['player']['username'],
-                            'rank': rank_mapping.get(member.get('roleIndex', -1), 'Unknown'),
+                            'rank': rank_mapping.get(member.get('roleId', -1), 'Unknown'),
                             'points': 0,
                             'given_points': 0} for member in memberships]
                 conn = get_db()
@@ -352,7 +348,7 @@ def refresh_members():
     if group_data:
         memberships = group_data.get('memberships', [])
         members = [{'username': member['player']['username'],
-                    'rank': rank_mapping.get(member.get('roleIndex', -1), 'Unknown'),
+                    'rank': rank_mapping.get(member.get('roleId', -1), 'Unknown'),
                     'points': 0,
                     'given_points': 0} for member in memberships]
 
