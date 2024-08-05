@@ -21,8 +21,8 @@
             <tbody>
             {% for config in configs %}
             <tr>
-                <td><input type="text" name="rank_{{ config['rank'] }}" class="form-control" value="{{ config['rank'] }}" readonly></td>
-                <td><input type="number" name="total_points_{{ config['rank'] }}" class="form-control" value="{{ config['total_points'] }}" required></td>
+                <td><input type="text" name="rank" class="form-control" value="{{ config['rank'] }}" required></td>
+                <td><input type="number" name="total_points" class="form-control" value="{{ config['total_points'] }}" required></td>
             </tr>
             {% endfor %}
             </tbody>

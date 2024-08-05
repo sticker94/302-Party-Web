@@ -7,6 +7,7 @@ import os
 import threading
 import time
 from dotenv import load_dotenv
+from apscheduler.schedulers.background import BackgroundScheduler
 
 # Load environment variables from .env file
 load_dotenv()
@@ -180,26 +181,35 @@ def config():
     if not replit_user_name:
         return redirect(url_for('index'))
 
-    conn = get_db()
-    if conn:
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute('SELECT rank FROM characters WHERE replit_user_name = %s AND verified = True', (replit_user_name,))
-        user_rank = cursor.fetchone()
-        if user_rank is None or user_rank['rank'] not in ['owner', 'deputy_owner']:
-            return redirect(url_for('index'))
-        cursor.execute('SELECT rank, total_points FROM config')
-        configs = cursor.fetchall()
+    configs = []
 
-        if request.method == 'POST':
-            for config in configs:
-                rank = request.form[f'rank_{config["rank"]}']
-                total_points = int(request.form[f'total_points_{config["rank"]}'])
+    if request.method == 'POST':
+        rank = request.form['rank']
+        total_points = int(request.form['total_points'])
+        try:
+            conn = get_db()
+            if conn:
+                cursor = conn.cursor()
                 cursor.execute('INSERT INTO config (rank, total_points) VALUES (%s, %s) ON DUPLICATE KEY UPDATE total_points=%s', (rank, total_points, total_points))
-            conn.commit()
-        cursor.close()
-        conn.close()
+                conn.commit()
+                cursor.close()
+                conn.close()
+        except mysql.connector.Error as e:
+            print(f"Database Error: {e}")
+
+    try:
+        conn = get_db()
+        if conn:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute('SELECT * FROM config')
+            configs = cursor.fetchall()
+            cursor.close()
+            conn.close()
+    except mysql.connector.Error as e:
+        print(f"Database Error: {e}")
 
     return render_template('config.html', replit_user_name=replit_user_name, configs=configs)
+
 
 @app.route('/player_config', methods=['GET', 'POST'])
 def player_config():
@@ -306,8 +316,35 @@ def verify_character():
         print(f"Database Error: {e}")
         return jsonify({"status": "failure", "message": "An error occurred. Please try again later."}), 500
 
+def refresh_members():
+    # Your existing logic to fetch and update members
+    group_id = 6117
+    group_data = get_group_data(group_id)
+    if group_data:
+        memberships = group_data.get('memberships', [])
+        members = [{'username': member['player']['username'],
+                    'rank': member['role'],
+                    'points': 0,
+                    'given_points': 0} for member in memberships]
+
+        try:
+            conn = get_db()
+            if conn:
+                cursor = conn.cursor()
+                for member in members:
+                    print(f"Inserting/updating member: {member['username']}")
+                    cursor.execute('INSERT INTO members (username, rank, points, given_points) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE rank=%s, points=%s, given_points=%s',
+                                   (member['username'], member['rank'], member['points'], member['given_points'], member['rank'], member['points'], member['given_points']))
+                conn.commit()
+                cursor.close()
+                conn.close()
+        except mysql.connector.Error as e:
+            print(f"Database Error (INSERT/UPDATE): {e}")
+
 if __name__ == '__main__':
-    init_db()  # Initialize the database when the app starts
-    threading.Thread(target=update_player_data, daemon=True).start()
-    threading.Thread(target=reset_points_weekly, daemon=True).start()
+    init_db()
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(func=refresh_members, trigger="interval", minutes=10)
+    scheduler.start()
+    refresh_members()  # Initial load
     app.run(host='0.0.0.0', port=3000, debug=True)
