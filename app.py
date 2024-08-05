@@ -4,7 +4,6 @@ import requests
 import random
 import string
 import os
-import threading
 import time
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -22,6 +21,8 @@ DATABASE = {
     'database': os.getenv('RM_DB_NAME')
 }
 
+WOM_RANKS_URL = 'https://api.wiseoldman.net/v2/groups/type-definitions'
+
 def get_db():
     try:
         conn = mysql.connector.connect(
@@ -35,6 +36,21 @@ def get_db():
     except mysql.connector.Error as e:
         print(f"Error: {e}")
     return None
+
+def fetch_wom_ranks():
+    response = requests.get(WOM_RANKS_URL)
+    if response.status_code == 200:
+        return response.json().get('roleDefinitions', [])
+    return []
+
+def map_wom_ranks(wom_ranks):
+    rank_mapping = {}
+    for rank in wom_ranks:
+        rank_mapping[rank['index']] = rank['name']
+    return rank_mapping
+
+wom_ranks = fetch_wom_ranks()
+rank_mapping = map_wom_ranks(wom_ranks)
 
 def init_db():
     conn = get_db()
@@ -73,6 +89,20 @@ def init_db():
         cursor.close()
         conn.close()
 
+        # Insert ranks into config table
+        update_config_with_ranks()
+
+def update_config_with_ranks():
+    conn = get_db()
+    if conn:
+        cursor = conn.cursor()
+        for rank_index, rank_name in rank_mapping.items():
+            cursor.execute('INSERT INTO config (rank, total_points) VALUES (%s, %s) ON DUPLICATE KEY UPDATE rank=%s',
+                           (rank_name, 0, rank_name))
+        conn.commit()
+        cursor.close()
+        conn.close()
+
 def get_group_data(group_id):
     response = requests.get(f"https://api.wiseoldman.net/v2/groups/{group_id}")
     if response.status_code == 200:
@@ -91,7 +121,7 @@ def update_player_data():
             if group_data:
                 memberships = group_data.get('memberships', [])
                 members = [{'username': member['player']['username'],
-                            'rank': member['role'],
+                            'rank': rank_mapping.get(member.get('roleIndex', -1), 'Unknown'),
                             'points': 0,
                             'given_points': 0} for member in memberships]
                 conn = get_db()
@@ -317,13 +347,12 @@ def verify_character():
         return jsonify({"status": "failure", "message": "An error occurred. Please try again later."}), 500
 
 def refresh_members():
-    # Your existing logic to fetch and update members
     group_id = 6117
     group_data = get_group_data(group_id)
     if group_data:
         memberships = group_data.get('memberships', [])
         members = [{'username': member['player']['username'],
-                    'rank': member['role'],
+                    'rank': rank_mapping.get(member.get('roleIndex', -1), 'Unknown'),
                     'points': 0,
                     'given_points': 0} for member in memberships]
 
