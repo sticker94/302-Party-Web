@@ -211,13 +211,13 @@ def config():
     configs = []
 
     if request.method == 'POST':
-        rank = request.form['rank']
-        total_points = int(request.form['total_points'])
         try:
             conn = get_db()
             if conn:
                 cursor = conn.cursor()
-                cursor.execute('INSERT INTO config (rank, total_points, rank_order) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE total_points=%s', (rank, total_points, rank, total_points))
+                for rank, total_points in zip(request.form.getlist('rank'), request.form.getlist('total_points')):
+                    cursor.execute('INSERT INTO config (rank, total_points) VALUES (%s, %s) ON DUPLICATE KEY UPDATE total_points=%s',
+                                   (rank, total_points, total_points))
                 conn.commit()
                 cursor.close()
                 conn.close()
@@ -236,6 +236,7 @@ def config():
         print(f"Database Error: {e}")
 
     return render_template('config.html', replit_user_name=replit_user_name, configs=configs)
+
 
 
 @app.route('/player_config', methods=['GET', 'POST'])
