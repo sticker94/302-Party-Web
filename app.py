@@ -65,6 +65,7 @@ def init_db():
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 rank VARCHAR(255),
                 total_points INT,
+                rank_order INT,
                 UNIQUE(rank)
             )
         ''')
@@ -78,8 +79,8 @@ def update_config_with_ranks():
     if conn:
         cursor = conn.cursor()
         for rank in rank_mapping.values():
-            cursor.execute('INSERT INTO config (rank, total_points) VALUES (%s, %s) ON DUPLICATE KEY UPDATE rank=%s',
-                           (rank, 0, rank))
+            cursor.execute('INSERT INTO config (rank, total_points, rank_order) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE rank=%s',
+                           (rank, 0, 0, rank))
         conn.commit()
         cursor.close()
         conn.close()
@@ -216,7 +217,7 @@ def config():
             conn = get_db()
             if conn:
                 cursor = conn.cursor()
-                cursor.execute('INSERT INTO config (rank, total_points) VALUES (%s, %s) ON DUPLICATE KEY UPDATE total_points=%s', (rank, total_points, total_points))
+                cursor.execute('INSERT INTO config (rank, total_points, rank_order) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE total_points=%s', (rank, total_points, rank, total_points))
                 conn.commit()
                 cursor.close()
                 conn.close()
@@ -227,7 +228,7 @@ def config():
         conn = get_db()
         if conn:
             cursor = conn.cursor(dictionary=True)
-            cursor.execute('SELECT * FROM config')
+            cursor.execute('SELECT * FROM config ORDER BY rank_order')
             configs = cursor.fetchall()
             cursor.close()
             conn.close()
@@ -347,14 +348,15 @@ def refresh_members():
     group_data = get_group_data(group_id)
     if group_data:
         memberships = group_data.get('memberships', [])
+        rank_order = 1  # Initialize rank_order
+
         for member in memberships[:5]:  # Inspect only the first 5 members for brevity
             print(f"Member data: {member}")
             role = member.get('role', 'Unknown')
-            role_name = rank_mapping.get(role, 'Unknown')
-            print(f"Processing member: {member['player']['username']}, role: {role}, roleName: {role_name}")
+            print(f"Processing member: {member['player']['username']}, role: {role}")
 
         members = [{'username': member['player']['username'],
-                    'rank': rank_mapping.get(member.get('role', 'Unknown'), 'Unknown'),
+                    'rank': member.get('role', 'Unknown'),
                     'points': 0,
                     'given_points': 0} for member in memberships]
 
@@ -363,9 +365,13 @@ def refresh_members():
             if conn:
                 cursor = conn.cursor()
                 for member in members:
-                    print(f"Inserting/updating member: {member['username']}")
+                    rank = member['rank']
+                    print(f"Inserting/updating member: {member['username']} with rank {rank} and order {rank_order}")
                     cursor.execute('INSERT INTO members (username, rank, points, given_points) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE rank=%s, points=%s, given_points=%s',
                                    (member['username'], member['rank'], member['points'], member['given_points'], member['rank'], member['points'], member['given_points']))
+                    cursor.execute('INSERT INTO config (rank, rank_order) VALUES (%s, %s) ON DUPLICATE KEY UPDATE rank_order=%s',
+                                   (rank, rank_order, rank_order))
+                    rank_order += 1
                 conn.commit()
                 cursor.close()
                 conn.close()
@@ -379,4 +385,3 @@ if __name__ == '__main__':
     scheduler.start()
     refresh_members()  # Initial load
     app.run(host='0.0.0.0', port=3000, debug=True)
-

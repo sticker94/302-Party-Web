@@ -16,6 +16,7 @@
             <tr>
                 <th>Rank</th>
                 <th>Total Points</th>
+                <th>Rank Order</th>
             </tr>
             </thead>
             <tbody>
@@ -23,6 +24,7 @@
             <tr>
                 <td><input type="text" name="rank" class="form-control" value="{{ config['rank'] }}" required></td>
                 <td><input type="number" name="total_points" class="form-control" value="{{ config['total_points'] }}" required></td>
+                <td>{{ config['rank_order'] }}</td>
             </tr>
             {% endfor %}
             </tbody>
