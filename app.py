@@ -126,8 +126,8 @@ def update_player_data():
                     cursor = conn.cursor()
                     for member in members:
                         print(f"Inserting/updating member: {member['username']}")
-                        cursor.execute('INSERT INTO members (username, rank, points, given_points) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE rank=%s, points=%s, given_points=%s',
-                                       (member['username'], member['rank'], member['points'], member['given_points'], member['rank'], member['points'], member['given_points']))
+                        cursor.execute('INSERT INTO members (username, rank, points, given_points) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE rank=%s',
+                                       (member['username'], member['rank'], member['points'], member['given_points'], member['rank']))
                     conn.commit()
                     cursor.close()
                     conn.close()
@@ -165,6 +165,9 @@ def index():
     members = []
     ranks = []
 
+    total_points = 0
+    points_available = 0
+
     query = 'SELECT DISTINCT rank FROM members ORDER BY rank'
     try:
         conn = get_db()
@@ -193,6 +196,23 @@ def index():
             print(f"Executing query: {query}")
             cursor.execute(query)
             members = cursor.fetchall()
+
+            # Calculate total_points and points_available for the logged-in user
+            if replit_user_id:
+                cursor.execute('''
+                    SELECT c.rank, c.total_points, m.given_points
+                    FROM characters ch
+                    JOIN members m ON ch.character_name = m.username
+                    JOIN config c ON m.rank = c.rank
+                    WHERE ch.replit_user_id = %s
+                    ORDER BY c.rank_order ASC
+                    LIMIT 1
+                ''', (replit_user_id,))
+                result = cursor.fetchone()
+                if result:
+                    total_points = result['total_points']
+                    points_available = total_points - result['given_points']
+
             cursor.close()
             conn.close()
             print(f"Fetched members: {members}")
@@ -200,7 +220,7 @@ def index():
         print(f"Database Error (SELECT MEMBERS): {e}")
         error_message = "Error fetching members from the database."
 
-    return render_template('index.html', members=members, search=search_query, sort=sort_by, rank=filter_rank, ranks=ranks, replit_user_name=replit_user_name, error_message=error_message)
+    return render_template('index.html', members=members, search=search_query, sort=sort_by, rank=filter_rank, ranks=ranks, replit_user_name=replit_user_name, error_message=error_message, total_points=total_points, points_available=points_available)
 
 @app.route('/config', methods=['GET', 'POST'])
 def config():
@@ -236,8 +256,6 @@ def config():
         print(f"Database Error: {e}")
 
     return render_template('config.html', replit_user_name=replit_user_name, configs=configs)
-
-
 
 @app.route('/player_config', methods=['GET', 'POST'])
 def player_config():
@@ -294,6 +312,7 @@ def player_config():
 
 @app.route('/assign_points', methods=['POST'])
 def assign_points():
+    replit_user_id = request.headers.get('X-Replit-User-Id')
     replit_user_name = request.headers.get('X-Replit-User-Name')
     if not replit_user_name:
         return redirect(url_for('index'))
@@ -305,6 +324,12 @@ def assign_points():
         if conn:
             cursor = conn.cursor()
             cursor.execute('UPDATE members SET points = points + %s WHERE username = %s', (points, username))
+            cursor.execute('''
+                UPDATE members m
+                JOIN characters ch ON m.username = ch.character_name
+                SET m.given_points = m.given_points + %s
+                WHERE ch.replit_user_id = %s
+            ''', (points, replit_user_id))
             conn.commit()
             cursor.close()
             conn.close()
@@ -368,8 +393,8 @@ def refresh_members():
                 for member in members:
                     rank = member['rank']
                     print(f"Inserting/updating member: {member['username']} with rank {rank} and order {rank_order}")
-                    cursor.execute('INSERT INTO members (username, rank, points, given_points) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE rank=%s, points=%s, given_points=%s',
-                                   (member['username'], member['rank'], member['points'], member['given_points'], member['rank'], member['points'], member['given_points']))
+                    cursor.execute('INSERT INTO members (username, rank, points, given_points) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE rank=%s',
+                                   (member['username'], member['rank'], member['points'], member['given_points'], member['rank']))
                     cursor.execute('INSERT INTO config (rank, rank_order) VALUES (%s, %s) ON DUPLICATE KEY UPDATE rank_order=%s',
                                    (rank, rank_order, rank_order))
                     rank_order += 1
