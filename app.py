@@ -347,8 +347,14 @@ def refresh_members():
     group_data = get_group_data(group_id)
     if group_data:
         memberships = group_data.get('memberships', [])
+        for member in memberships[:5]:  # Inspect only the first 5 members for brevity
+            print(f"Member data: {member}")
+            role = member.get('role', 'Unknown')
+            role_name = rank_mapping.get(role, 'Unknown')
+            print(f"Processing member: {member['player']['username']}, role: {role}, roleName: {role_name}")
+
         members = [{'username': member['player']['username'],
-                    'rank': rank_mapping.get(member.get('roleId', -1), 'Unknown'),
+                    'rank': rank_mapping.get(member.get('role', 'Unknown'), 'Unknown'),
                     'points': 0,
                     'given_points': 0} for member in memberships]
 
@@ -373,3 +379,4 @@ if __name__ == '__main__':
     scheduler.start()
     refresh_members()  # Initial load
     app.run(host='0.0.0.0', port=3000, debug=True)
+
