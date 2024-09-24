@@ -1,19 +1,22 @@
-from flask import Flask, render_template, request, redirect, url_for, jsonify
+from flask import Flask, render_template, request, redirect, url_for, jsonify, session, send_from_directory
+from flask_cors import CORS
+from flask_caching import Cache
 import mysql.connector
 import requests
-import random
-import string
 import os
-import time
 from dotenv import load_dotenv
-from apscheduler.schedulers.background import BackgroundScheduler
 
 # Load environment variables from .env file
 load_dotenv()
 
 app = Flask(__name__)
+CORS(app, resources={r"/api/*": {"origins": "http://localhost:3000"}})
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'your_secret_key')
 
+# Setup caching configuration
+cache = Cache(app, config={'CACHE_TYPE': 'simple', 'CACHE_DEFAULT_TIMEOUT': 600})  # Cache timeout set to 10 minutes
+
+# Database configuration
 DATABASE = {
     'host': os.getenv('RM_DB_HOST'),
     'user': os.getenv('RM_DB_USER'),
@@ -21,8 +24,19 @@ DATABASE = {
     'database': os.getenv('RM_DB_NAME')
 }
 
-DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1269867901897281708/JuRqO4XNXuAElFVY-S5C-nLQcduS5EGlECT_4_GkiA-gTGjgolswtOZCCyCCJKINLkLC'
+#API_KEY for GE Tracker
+API_KEY = os.getenv('API_KEY')
 
+# Discord OAuth2 Configuration
+DISCORD_CLIENT_ID = os.getenv('DISCORD_CLIENT_ID')
+DISCORD_CLIENT_SECRET = os.getenv('DISCORD_CLIENT_SECRET')
+DISCORD_REDIRECT_URI = os.getenv('DISCORD_REDIRECT_URI')
+DISCORD_GUILD_ID = os.getenv('DISCORD_GUILD_ID')
+DISCORD_REQUIRED_ROLE_ID = os.getenv('DISCORD_REQUIRED_ROLE_ID')
+DISCORD_WEBHOOK_URL = os.getenv('DISCORD_WEBHOOK_URL')
+OAUTH2_ENABLED = os.getenv('OAUTH2_ENABLED', 'true').lower() == 'true'
+
+# Utility Functions
 def get_db():
     try:
         conn = mysql.connector.connect(
@@ -37,291 +51,94 @@ def get_db():
         print(f"Error: {e}")
     return None
 
-def init_db():
-    conn = get_db()
-    if conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS members (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                username VARCHAR(255) NOT NULL,
-                rank VARCHAR(255),
-                points INT,
-                given_points INT,
-                UNIQUE(username)
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS characters (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                character_name VARCHAR(255) NOT NULL,
-                replit_user_id VARCHAR(255) NOT NULL,
-                replit_user_name VARCHAR(255) NOT NULL,
-                verification_key VARCHAR(255),
-                verified BOOLEAN,
-                UNIQUE(character_name, replit_user_id)
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS config (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                rank VARCHAR(255),
-                total_points INT,
-                rank_order INT,
-                UNIQUE(rank)
-            )
-        ''')
-        conn.commit()
-        cursor.close()
-        conn.close()
-        update_config_with_ranks()
+def exchange_code_for_token(code):
+    data = {
+        'client_id': DISCORD_CLIENT_ID,
+        'client_secret': DISCORD_CLIENT_SECRET,
+        'grant_type': 'authorization_code',
+        'code': code,
+        'redirect_uri': DISCORD_REDIRECT_URI,
+    }
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+    response = requests.post('https://discord.com/api/oauth2/token', data=data, headers=headers)
+    return response.json()
 
-def update_config_with_ranks():
-    conn = get_db()
-    if conn:
-        cursor = conn.cursor()
-        for rank in rank_mapping.values():
-            cursor.execute('INSERT INTO config (rank, total_points, rank_order) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE rank=%s',
-                           (rank, 0, 0, rank))
-        conn.commit()
-        cursor.close()
-        conn.close()
+def get_user_info(access_token):
+    headers = {'Authorization': f'Bearer {access_token}'}
+    response = requests.get('https://discord.com/api/users/@me', headers=headers)
+    return response.json()
 
-def get_group_data(group_id):
-    response = requests.get(f"https://api.wiseoldman.net/v2/groups/{group_id}")
+def get_user_roles(access_token, guild_id):
+    headers = {'Authorization': f'Bearer {access_token}'}
+    response = requests.get(f'https://discord.com/api/users/@me/guilds/{guild_id}/member', headers=headers)
     if response.status_code == 200:
-        return response.json()
-    return None
-
-def generate_verification_key(length=6):
-    characters = string.ascii_uppercase + string.digits
-    return ''.join(random.choice(characters) for i in range(length))
-
-def fetch_wom_ranks():
-    response = requests.get('https://api.wiseoldman.net/v2/groups/type-definitions')
-    if response.status_code == 200:
-        return response.json().get('roleDefinitions', [])
+        return response.json().get('roles', [])
     return []
 
-def map_wom_ranks(wom_ranks):
-    rank_mapping = {}
-    for rank in wom_ranks:
-        rank_mapping[rank['id']] = rank['name']
-    return rank_mapping
+def has_required_role(access_token):
+    roles = get_user_roles(access_token, DISCORD_GUILD_ID)
+    return DISCORD_REQUIRED_ROLE_ID in roles
 
-wom_ranks = fetch_wom_ranks()
-rank_mapping = map_wom_ranks(wom_ranks)
+# Routes for OAuth2 and Main Pages
+@app.route('/login')
+def login():
+    return redirect(f'https://discord.com/api/oauth2/authorize?client_id={DISCORD_CLIENT_ID}&redirect_uri={DISCORD_REDIRECT_URI}&response_type=code&scope=identify%20guilds')
 
-def send_discord_webhook(message):
-    data = {"content": message}
-    response = requests.post(DISCORD_WEBHOOK_URL, json=data)
-    if response.status_code != 204:
-        print(f"Failed to send webhook: {response.status_code} - {response.text}")
-
-def update_player_data():
-    while True:
-        try:
-            group_id = 6117
-            group_data = get_group_data(group_id)
-            if group_data:
-                memberships = group_data.get('memberships', [])
-                members = [{'username': member['player']['username'],
-                            'rank': rank_mapping.get(member.get('roleId', -1), 'Unknown'),
-                            'points': 0,
-                            'given_points': 0} for member in memberships]
-                conn = get_db()
-                if conn:
-                    cursor = conn.cursor()
-                    for member in members:
-                        print(f"Inserting/updating member: {member['username']}")
-                        cursor.execute('INSERT INTO members (username, rank, points, given_points) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE rank=%s',
-                                       (member['username'], member['rank'], member['points'], member['given_points'], member['rank']))
-                    conn.commit()
-                    cursor.close()
-                    conn.close()
-            time.sleep(600)  # Sleep for 10 minutes
-        except mysql.connector.Error as e:
-            print(f"Database Error (UPDATE): {e}")
-            time.sleep(600)  # Sleep for 10 minutes even if there's an error
-
-def reset_points_weekly():
-    while True:
-        try:
-            conn = get_db()
-            if conn:
-                cursor = conn.cursor()
-                cursor.execute('UPDATE members SET points = 0, given_points = 0')
-                conn.commit()
-                cursor.close()
-                conn.close()
-            time.sleep(604800)  # Sleep for 1 week
-        except mysql.connector.Error as e:
-            print(f"Database Error (RESET): {e}")
-            time.sleep(604800)  # Sleep for 1 week even if there's an error
-
+# Serve the React app from the build folder
 @app.route('/')
-def index():
-    replit_user_id = request.headers.get('X-Replit-User-Id')
-    replit_user_name = request.headers.get('X-Replit-User-Name')
+@app.route('/<path:path>')
+def serve_react(path=None):
+    if path and os.path.exists(os.path.join(app.static_folder, path)):
+        return send_from_directory(app.static_folder, path)
+    return send_from_directory(app.static_folder, 'index.html')
+@app.route('/api/members', methods=['GET'])
+def get_members():
+    if OAUTH2_ENABLED and not session.get('authenticated'):
+        return jsonify({'error': 'Not authenticated'}), 401
 
-    group_id = 6117
     search_query = request.args.get('search', '')
     sort_by = request.args.get('sort', 'username')
     filter_rank = request.args.get('rank', '')
+    members, ranks, error_message = [], [], None
 
-    error_message = None
-    members = []
-    ranks = []
-
-    total_points = 0
-    points_available = 0
-
-    query = 'SELECT DISTINCT rank FROM members ORDER BY rank'
+    # Query for ranks and members
     try:
         conn = get_db()
         if conn:
             cursor = conn.cursor(dictionary=True)
-            cursor.execute(query)
+            cursor.execute('SELECT DISTINCT rank FROM members ORDER BY rank')
             ranks = cursor.fetchall()
-            cursor.close()
-            conn.close()
-            print(f"Fetched ranks: {ranks}")
-    except mysql.connector.Error as e:
-        print(f"Database Error (SELECT RANKS): {e}")
-        error_message = "Error fetching ranks from the database."
 
-    query = 'SELECT * FROM members WHERE 1=1'
-    if search_query:
-        query += f" AND username LIKE '%{search_query}%'"
-    if filter_rank:
-        query += f" AND rank = '{filter_rank}'"
-    query += f" ORDER BY {sort_by}"
+            query = 'SELECT * FROM members WHERE 1=1'
+            if search_query:
+                query += f" AND username LIKE '%{search_query}%'"
+            if filter_rank:
+                query += f" AND rank = '{filter_rank}'"
+            query += f" ORDER BY {sort_by}"
 
-    try:
-        conn = get_db()
-        if conn:
-            cursor = conn.cursor(dictionary=True)
-            print(f"Executing query: {query}")
             cursor.execute(query)
             members = cursor.fetchall()
-
-            # Calculate total_points and points_available for the logged-in user
-            if replit_user_id:
-                cursor.execute('''
-                    SELECT c.rank, c.total_points, m.given_points
-                    FROM characters ch
-                    JOIN members m ON ch.character_name = m.username
-                    JOIN config c ON m.rank = c.rank
-                    WHERE ch.replit_user_id = %s
-                    ORDER BY c.rank_order ASC
-                    LIMIT 1
-                ''', (replit_user_id,))
-                result = cursor.fetchone()
-                if result:
-                    total_points = result['total_points']
-                    points_available = total_points - result['given_points']
-
-            cursor.close()
-            conn.close()
-            print(f"Fetched members: {members}")
-    except mysql.connector.Error as e:
-        print(f"Database Error (SELECT MEMBERS): {e}")
-        error_message = "Error fetching members from the database."
-
-    return render_template('index.html', members=members, search=search_query, sort=sort_by, rank=filter_rank, ranks=ranks, replit_user_name=replit_user_name, error_message=error_message, total_points=total_points, points_available=points_available)
-
-@app.route('/config', methods=['GET', 'POST'])
-def config():
-    replit_user_name = request.headers.get('X-Replit-User-Name')
-    if not replit_user_name:
-        return redirect(url_for('index'))
-
-    configs = []
-
-    if request.method == 'POST':
-        try:
-            conn = get_db()
-            if conn:
-                cursor = conn.cursor()
-                for rank, total_points in zip(request.form.getlist('rank'), request.form.getlist('total_points')):
-                    cursor.execute('INSERT INTO config (rank, total_points) VALUES (%s, %s) ON DUPLICATE KEY UPDATE total_points=%s',
-                                   (rank, total_points, total_points))
-                conn.commit()
-                cursor.close()
-                conn.close()
-        except mysql.connector.Error as e:
-            print(f"Database Error: {e}")
-
-    try:
-        conn = get_db()
-        if conn:
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute('SELECT * FROM config ORDER BY rank_order')
-            configs = cursor.fetchall()
             cursor.close()
             conn.close()
     except mysql.connector.Error as e:
+        error_message = "Error fetching data from the database."
         print(f"Database Error: {e}")
+        return jsonify({'error': error_message}), 500
 
-    return render_template('config.html', replit_user_name=replit_user_name, configs=configs)
+    return jsonify({
+        'members': members,
+        'ranks': ranks
+    })
 
-@app.route('/player_config', methods=['GET', 'POST'])
-def player_config():
-    replit_user_id = request.headers.get('X-Replit-User-Id')
-    replit_user_name = request.headers.get('X-Replit-User-Name')
-    if not replit_user_name:
-        return redirect(url_for('index'))
-
-    message = None
-    token = None
-    characters = []
-
-    if request.method == 'POST':
-        character_name = request.form['character_name']
-        verification_key = generate_verification_key()
-        try:
-            conn = get_db()
-            if conn:
-                cursor = conn.cursor(dictionary=True)
-                cursor.execute('SELECT * FROM characters WHERE character_name = %s', (character_name,))
-                existing_character = cursor.fetchone()
-                if existing_character is not None and isinstance(existing_character, dict):
-                    if existing_character['replit_user_id'] == replit_user_id:
-                        message = "Character already exists and belongs to you."
-                        token = existing_character['verification_key']
-                    else:
-                        message = "Character already claimed by another user."
-                else:
-                    cursor.execute('INSERT INTO characters (character_name, replit_user_id, replit_user_name, verification_key, verified) VALUES (%s, %s, %s, %s, %s)',
-                                   (character_name, replit_user_id, replit_user_name, verification_key, False))
-                    conn.commit()
-                    message = "Character added successfully."
-                    token = verification_key
-                cursor.execute('SELECT * FROM characters WHERE replit_user_id = %s', (replit_user_id,))
-                characters = cursor.fetchall()
-                cursor.close()
-                conn.close()
-        except mysql.connector.Error as e:
-            print(f"Database Error: {e}")
-            message = "An error occurred. Please try again later."
-    else:
-        try:
-            conn = get_db()
-            if conn:
-                cursor = conn.cursor(dictionary=True)
-                cursor.execute('SELECT * FROM characters WHERE replit_user_id = %s', (replit_user_id,))
-                characters = cursor.fetchall()
-                cursor.close()
-                conn.close()
-        except mysql.connector.Error as e:
-            print(f"Database Error: {e}")
-
-    return render_template('player_config.html', message=message, replit_user_name=replit_user_name, token=token, characters=characters)
-
-@app.route('/assign_points', methods=['POST'])
+# Assign Points Route
+@app.route('/api/assign_points', methods=['POST'])
 def assign_points():
-    replit_user_id = request.headers.get('X-Replit-User-Id')
-    replit_user_name = request.headers.get('X-Replit-User-Name')
+    if OAUTH2_ENABLED and not session.get('authenticated'):
+        return redirect('/login')
+
+    replit_user_id = session.get('replit_user_id', None)
+    replit_user_name = session.get('replit_user_name', None)
+
     if not replit_user_name:
         return redirect(url_for('index'))
 
@@ -342,13 +159,13 @@ def assign_points():
 
             # Get the highest verified character name for the user
             cursor.execute('''
-                SELECT ch.character_name
-                FROM characters ch
-                JOIN members m ON ch.character_name = m.username
-                JOIN config c ON m.rank = c.rank
-                WHERE ch.replit_user_id = %s AND ch.verified = 1
-                ORDER BY c.rank_order ASC
-                LIMIT 1
+            SELECT ch.character_name
+            FROM characters ch
+            JOIN members m ON ch.character_name = m.username
+            JOIN config c ON m.rank = c.rank
+            WHERE ch.replit_user_id = %s AND ch.verified = 1
+            ORDER BY c.rank_order ASC
+            LIMIT 1
             ''', (replit_user_id,))
             character_result = cursor.fetchone()
             character_name = character_result['character_name'] if character_result else replit_user_name
@@ -363,79 +180,104 @@ def assign_points():
 
     except mysql.connector.Error as e:
         print(f"Database Error: {e}")
-    return redirect(url_for('index'))
+    pass
+@app.route('/api/crafting_smithing/blast_furnace', methods=['GET'])
+def get_blast_furnace():
+    # Fetch data from external API or database
+    # Sample response format for now:
+    data = {
+        "name": "Blast Furnace",
+        "items": [
+            {"name": "Steel Bar", "profit": 250},
+            {"name": "Gold Bar", "profit": 180}
+        ]
+    }
+    return jsonify(data)
 
-@app.route('/logout')
-def logout():
-    return redirect(url_for('index'))
+@app.route('/api/crafting_smithing/cooking_brewing', methods=['GET'])
+def get_cooking_brewing():
+    # Fetch data for cooking/brewing
+    data = {
+        "name": "Cooking/Brewing",
+        "items": [
+            {"name": "Wine", "profit": 100},
+            {"name": "Beer", "profit": 75}
+        ]
+    }
+    return jsonify(data)
 
-@app.route('/verify_character', methods=['POST'])
-def verify_character():
-    data = request.json
-    character_name = data.get('character_name')
-    verification_key = data.get('verification_key')
+# Utility Functions
+def get_api_data(api_endpoint, input_params=None):
+    """Fetch data from the external API."""
+    headers = {
+        'Authorization': f'Bearer {API_KEY}',  # Use Bearer token for authentication
+        'Accept': 'application/x.getracker.v2.1+json',
+        'User-Agent': '302 Party (Sticker94 / Discord: doaight)',  # Add a user-agent header to match what Postman sends
+        'Content-Type': 'application/json'  # Include Content-Type if required
+    }
+    url = f'https://www.ge-tracker.com{api_endpoint}'
 
     try:
-        conn = get_db()
-        if conn:
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute('SELECT * FROM characters WHERE character_name = %s AND verification_key = %s',
-                           (character_name, verification_key))
-            character = cursor.fetchone()
-            if character:
-                cursor.execute('UPDATE characters SET verified = %s WHERE character_name = %s AND verification_key = %s',
-                               (True, character_name, verification_key))
-                conn.commit()
-                cursor.close()
-                conn.close()
-                return jsonify({"status": "success", "message": "Character verified."}), 200
-            else:
-                cursor.close()
-                conn.close()
-                return jsonify({"status": "failure", "message": "Verification failed."}), 400
-    except mysql.connector.Error as e:
-        print(f"Database Error: {e}")
-        return jsonify({"status": "failure", "message": "An error occurred. Please try again later."}), 500
+        # Make GET request to the API with optional input params
+        response = requests.get(url, headers=headers, params=input_params)
 
-def refresh_members():
-    group_id = 6117
-    group_data = get_group_data(group_id)
-    if group_data:
-        memberships = group_data.get('memberships', [])
-        rank_order = 1  # Initialize rank_order
+        # Check if request was successful
+        response.raise_for_status()
 
-        for member in memberships[:5]:  # Inspect only the first 5 members for brevity
-            print(f"Member data: {member}")
-            role = member.get('role', 'Unknown')
-            print(f"Processing member: {member['player']['username']}, role: {role}")
+        # Return the JSON data
+        return response.json()
 
-        members = [{'username': member['player']['username'],
-                    'rank': member.get('role', 'Unknown'),
-                    'points': 0,
-                    'given_points': 0} for member in memberships]
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching data from {url}: {e}")
+        return None
 
-        try:
-            conn = get_db()
-            if conn:
-                cursor = conn.cursor()
-                for member in members:
-                    rank = member['rank']
-                    print(f"Inserting/updating member: {member['username']} with rank {rank} and order {rank_order}")
-                    cursor.execute('INSERT INTO members (username, rank, points, given_points) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE rank=%s',
-                                   (member['username'], member['rank'], member['points'], member['given_points'], member['rank']))
-                    cursor.execute('INSERT INTO config (rank, rank_order) VALUES (%s, %s) ON DUPLICATE KEY UPDATE rank_order=%s',
-                                   (rank, rank_order, rank_order))
-                    rank_order += 1
-                conn.commit()
-                cursor.close()
-                conn.close()
-        except mysql.connector.Error as e:
-            print(f"Database Error (INSERT/UPDATE): {e}")
+@app.route('/api/item_price/<string:item_name>', methods=['GET'])
+def get_item_price(item_name):
+    """Fetch the latest price for any item based on the item name."""
+
+    # Fetch the item data using the item name
+    item_data = get_api_data(f'/api/items/search/{item_name}')
+
+    if item_data is None or 'data' not in item_data:
+        return jsonify({"error": f"Failed to fetch data for item: {item_name}"}), 500
+
+    # Extract relevant data from the fetched item info
+    item_price = item_data['data'][0]['buying'] if item_data and 'data' in item_data else 0
+
+    return jsonify({
+        "item": item_name,
+        "price": item_price,
+        "url": item_data['data'][0]['url']  # Provide the URL if needed
+    })
+
+
+# Routes for crafting and smithing
+
+@app.route('/api/crafting_smithing/tan_leather', methods=['GET'])
+def get_tan_leather():
+    """Fetch tan leather data from the external API"""
+    data = get_api_data('/api/tan-leather')
+
+    if data:
+        return jsonify(data)
+    else:
+        return jsonify({"error": "Unable to fetch Tan Leather data"}), 500
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('index'))
+
+def send_discord_webhook(message):
+    data = {"content": message}
+    response = requests.post(DISCORD_WEBHOOK_URL, json=data)
+    if response.status_code != 204:
+        print(f"Failed to send webhook: {response.status_code} - {response.text}")
+
+def get_group_data(group_id):
+    response = requests.get(f"https://api.wiseoldman.net/v2/groups/{group_id}")
+    if response.status_code == 200:
+        return response.json()
+    return None
 
 if __name__ == '__main__':
-    init_db()
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(func=refresh_members, trigger="interval", minutes=10)
-    scheduler.start()
-    refresh_members()  # Initial load
-    app.run(host='0.0.0.0', port=3000, debug=True)
+    app.run(host='0.0.0.0', port=3001, debug=True)
