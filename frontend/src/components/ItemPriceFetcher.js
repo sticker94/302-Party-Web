@@ -8,7 +8,7 @@ const ItemPriceFetcher = ({ itemName }) => {
     useEffect(() => {
         const fetchItemPrice = async () => {
             try {
-                const response = await axios.get(`http://localhost:3001/api/item_price/${itemName}`);
+                const response = await axios.get(`${process.env.REACT_APP_API_URL}/api/item_price/${itemName}`);
                 setItemPrice(response.data.price);
                 setLoading(false);
             } catch (error) {

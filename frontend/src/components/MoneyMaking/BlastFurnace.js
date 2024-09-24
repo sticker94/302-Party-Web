@@ -5,7 +5,7 @@ const BlastFurnace = () => {
     const [data, setData] = useState(null);
 
     useEffect(() => {
-        axios.get('http://localhost:3001/api/crafting_smithing/blast_furnace')
+        axios.get(`${process.env.REACT_APP_API_URL}/api/crafting_smithing/blast_furnace`)
             .then((response) => {
                 setData(response.data);
             })

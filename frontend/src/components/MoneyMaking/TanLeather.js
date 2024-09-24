@@ -14,11 +14,11 @@ const TanLeather = () => {
         const fetchRuneCosts = async () => {
             try {
                 // Fetch Nature Rune Price
-                const natureRuneResponse = await axios.get('http://localhost:3001/api/item_price/nature%20rune');
+                const natureRuneResponse = await axios.get(`${process.env.REACT_APP_API_URL}/api/item_price/nature%20rune`);
                 const natureRunePrice = natureRuneResponse.data.price;
 
                 // Fetch Astral Rune Price
-                const astralRuneResponse = await axios.get('http://localhost:3001/api/item_price/astral%20rune');
+                const astralRuneResponse = await axios.get(`${process.env.REACT_APP_API_URL}/api/item_price/astral%20rune`);
                 const astralRunePrice = astralRuneResponse.data.price;
 
                 // Set the prices in the state
@@ -34,7 +34,7 @@ const TanLeather = () => {
         // Fetch Tan Leather data
         const fetchData = async () => {
             try {
-                const response = await axios.get('http://localhost:3001/api/crafting_smithing/tan_leather');
+                const response = await axios.get(`${process.env.REACT_APP_API_URL}/api/crafting_smithing/tan_leather`);
                 setData(response.data.data);
                 setLoading(false);
 

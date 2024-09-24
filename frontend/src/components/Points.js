@@ -13,7 +13,7 @@ const Points = () => {
 
     const fetchMembers = useCallback(async () => {
         try {
-            const response = await axios.get('http://localhost:3001/api/members', {
+            const response = await axios.get(`${process.env.REACT_APP_API_URL}/api/members`, {
                 params: {
                     search: search,
                     rank: filterRank,

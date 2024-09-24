@@ -5,7 +5,7 @@ const CookingBrewing = () => {
     const [data, setData] = useState(null);
 
     useEffect(() => {
-        axios.get('http://localhost:3001/api/crafting_smithing/cooking_brewing')
+        axios.get(`${process.env.REACT_APP_API_URL}/api/crafting_smithing/cooking_brewing`)
             .then((response) => {
                 setData(response.data);
             })
