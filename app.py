@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "http://localhost:3000"}})
+CORS(app)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'your_secret_key')
 
 # Setup caching configuration
@@ -183,16 +183,13 @@ def assign_points():
     pass
 @app.route('/api/crafting_smithing/blast_furnace', methods=['GET'])
 def get_blast_furnace():
-    # Fetch data from external API or database
-    # Sample response format for now:
-    data = {
-        "name": "Blast Furnace",
-        "items": [
-            {"name": "Steel Bar", "profit": 250},
-            {"name": "Gold Bar", "profit": 180}
-        ]
-    }
-    return jsonify(data)
+    """Fetch Blast Furnace data from the external API"""
+    data = get_api_data('/api/blast-furnace')
+
+    if data:
+        return jsonify(data)
+    else:
+        return jsonify({"error": "Unable to fetch Blast Furnace data"}), 500
 
 @app.route('/api/crafting_smithing/cooking_brewing', methods=['GET'])
 def get_cooking_brewing():
